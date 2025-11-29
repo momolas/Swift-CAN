@@ -8,6 +8,8 @@ extension CAN {
 
         /// The sender or receiver arbitration id. Arbitration ids can be 11-bit or 29-bit.
         public let id: CAN.ArbitrationId
+        /// Whether the frame uses extended (29-bit) addressing.
+        public let isExtended: Bool
         /// Data Length Code
         public let dlc: Int
         /// Data bytes
@@ -17,17 +19,22 @@ extension CAN {
 
         /// Create a CAN frame with the specified DLC (data length code) `dlc` and `data`.
         /// While the DLC should match the data length, it is not a necessity.
-        public init(id: UInt32, dlc: Int, unpadded data: [UInt8], timestamp: Double = 0) {
+        public init(id: UInt32, dlc: Int, unpadded data: [UInt8], timestamp: Double = 0, extended: Bool? = nil) {
             self.id = id
+            self.isExtended = extended ?? (id > 0x7FF)
             self.dlc = dlc
             self.data = data
             self.timestamp = timestamp
         }
 
         /// Create a padded CAN frame from data. DLC is hardcoded to 8.
-        public init(id: UInt32, padded data: [UInt8], pad: UInt8 = 0xAA, timestamp: Double = 0) {
+        public init(id: UInt32, padded data: [UInt8], pad: UInt8 = 0xAA, timestamp: Double = 0, extended: Bool? = nil) {
             self.id = id
+            self.isExtended = extended ?? (id > 0x7FF)
             var data = data
+            if data.count > 8 {
+                data = Array(data.prefix(8))
+            }
             while data.count < 8 { data.append(pad) }
             self.dlc = data.count
             self.data = data
@@ -35,8 +42,9 @@ extension CAN {
         }
 
         /// Create an unpadded CAN frame from data. DLC is taken from length of data.
-        public init(id: UInt32, unpadded data: [UInt8], timestamp: Double = 0) {
+        public init(id: UInt32, unpadded data: [UInt8], timestamp: Double = 0, extended: Bool? = nil) {
             self.id = id
+            self.isExtended = extended ?? (id > 0x7FF)
             self.dlc = data.count
             self.data = data
             self.timestamp = timestamp
@@ -49,7 +57,7 @@ extension CAN.Frame: CustomStringConvertible {
     /// Format a CAN frame in the usual `candump`-compatible style with header, DLC, and data.
     /// Example: `7E0 [8] 11 22 33 44 55 66 77 88`
     public var description: String {
-        let id = self.id > 0x7FF ? String(format: "%08X", self.id) : String(format: "%03X", self.id)
+        let id = self.isExtended ? String(format: "%08X", self.id) : String(format: "%03X", self.id)
         let dlc = "[\(self.dlc)]"
         let data = self.data.map { String(format: "%02X", $0) }.joined(separator: " ")
         return "\(id) \(dlc) \(data)"
@@ -59,14 +67,20 @@ extension CAN.Frame: CustomStringConvertible {
 extension CAN.Frame {
 
     /// Returns true, if this frame has a broadcast address.
-    public var isBroadcast: Bool { self.id.isBroadcast }
+    public var isBroadcast: Bool {
+        if self.isExtended {
+            return self.id == CAN.ArbitrationId.Broadcast29
+        } else {
+            return self.id == CAN.ArbitrationId.Broadcast11
+        }
+    }
 
     /// Returns the originator for this frame.
     /// NOTE: The result is only valid for standard CAN/OBD2 addressing!
     public var originator: CAN.ArbitrationId? {
 
         guard !self.isBroadcast else { return nil }
-        if self.id < 0x800 {
+        if !self.isExtended {
             return self.id ^ 0x08
         } else {
             let id0 = UInt8(self.id >> 24 & 0xFF)
@@ -77,4 +91,3 @@ extension CAN.Frame {
         }
     }
 }
-
